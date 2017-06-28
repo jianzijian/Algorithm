@@ -1,5 +1,7 @@
 package redis.skiplist;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 
 public class CommonSkipList {
@@ -96,7 +98,7 @@ public class CommonSkipList {
 	/**
 	 * 插入并返回排名,T=O(logN)
 	 */
-	public int add(double score) {
+	public long add(double score) {
 		int level = this.randomLevel();
 		// 初始化表头节点未使用过的层
 		if (level > root.curMaxLevel) {
@@ -108,7 +110,7 @@ public class CommonSkipList {
 		// 每一层有可能需要更新的节点
 		SkipListNode[] updates = new SkipListNode[root.curMaxLevel];
 		// 每一层有可能需要更新的节点的排位（之后用来计算被更新节点、新节点的各层跨度）
-		int[] ranks = new int[root.curMaxLevel];
+		long[] ranks = new long[root.curMaxLevel];
 		SkipListNode curNode = root.head;
 		SkipListNode forward = null;
 		for (int i = root.curMaxLevel - 1; i >= 0; i--) {
@@ -120,17 +122,19 @@ public class CommonSkipList {
 				curNode = forward;
 			}
 			// 节点存在直接返回排位
-			if (forward.score == score) {
-				return ranks[i] + 1;
+			if (forward != null && forward.score == score) {
+				return ranks[i] + curNode.levels[i].span;
 			}
 			updates[i] = curNode;
 		}
 		// 插入并修正跨度
 		SkipListNode tarNode = new SkipListNode(level, score);
-		for (int i = level; i >= 0; i--) {
+		for (int i = level - 1; i >= 0; i--) {
+			tarNode.levels[i] = new SkipListLevel();
 			tarNode.levels[i].forward = updates[i].levels[i].forward;
 			updates[i].levels[i].forward = tarNode;
-			tarNode.levels[i].span = updates[i].levels[i].span - (ranks[0] - ranks[i]) + 1;
+			tarNode.levels[i].span = tarNode.levels[i].forward == null ? 0
+					: updates[i].levels[i].span - (ranks[0] - ranks[i]) + 1;
 			updates[i].levels[i].span = ranks[0] - ranks[i] + 1;
 		}
 		// 未直接接触（直接跨过了）的节点跨度也要+1
@@ -160,12 +164,12 @@ public class CommonSkipList {
 		int[] ranks = new int[root.curMaxLevel];
 		for (int i = root.curMaxLevel - 1; i >= 0; i--) {
 			ranks[i] = i == root.curMaxLevel - 1 ? 0 : ranks[i + 1];
-			while ((forward = curNode.levels[i].forward) != null && forward.score < score) {
+			while ((forward = curNode.levels[i].forward) != null && forward.score <= score) {
 				ranks[i] += curNode.levels[i].span;
 				curNode = forward;
 			}
-			if (forward.score == score) {
-				return ranks[i] + 1;
+			if (curNode.score == score) {
+				return ranks[i];
 			}
 		}
 		return -1;
@@ -181,7 +185,7 @@ public class CommonSkipList {
 			while ((forward = curNode.levels[i].forward) != null && forward.score < score) {
 				curNode = forward;
 			}
-			if (forward.score == score) {
+			if (forward != null && forward.score == score) {
 				tarNode = forward;
 			}
 			updates[i] = curNode;
@@ -214,15 +218,55 @@ public class CommonSkipList {
 		return root.size;
 	}
 
-	public double[] rangeByRank(int min, int max) {
-		min = min < 0 ? 0 : min;
-
-		return null;
+	public List<Double> range(long start, long end) {
+		List<Double> results = new ArrayList<>();
+		start = start < 0 ? root.size - Math.abs(start) + 1 : start;
+		start = Math.max(1, Math.min(start, root.size - 1));
+		end = end < 0 ? root.size - Math.abs(end) + 1 : end;
+		end = Math.max(1, Math.min(Math.max(start, end), root.size));
+		int curRank = 0;
+		SkipListNode tarNode = null, curNode = root.head, forward = null;
+		for (int i = root.curMaxLevel - 1; i >= 0; i--) {
+			while ((forward = curNode.levels[i].forward) != null && curRank + curNode.levels[i].span <= start) {
+				curRank += curNode.levels[i].span;
+				curNode = forward;
+			}
+			if (curRank == start) {
+				tarNode = curNode;
+				break;
+			}
+		}
+		if (tarNode != null) {
+			results.add(tarNode.score);
+			for (int i = 0; i < end - start; i++) {
+				results.add(tarNode.levels[0].forward.score);
+				tarNode = tarNode.levels[0].forward;
+			}
+		}
+		return results;
 	}
 
-	public double[] rangeByScore(int min, int max) {
-
-		return null;
+	public List<Double> rangeByScore(double min, double max) {
+		List<Double> results = new ArrayList<>();
+		max = Math.max(min, max);
+		SkipListNode tarMinNode = null, curNode = root.head, forward = null;
+		for (int i = root.curMaxLevel - 1; i >= 0; i--) {
+			while ((forward = curNode.levels[i].forward) != null && forward.score <= min) {
+				curNode = forward;
+			}
+			if (curNode.score == min) {
+				tarMinNode = curNode;
+				break;
+			}
+		}
+		if (tarMinNode != null) {
+			results.add(tarMinNode.score);
+			while ((forward = tarMinNode.levels[0].forward) != null && forward.score <= max) {
+				results.add(forward.score);
+				tarMinNode = forward;
+			}
+		}
+		return results;
 	}
 
 }

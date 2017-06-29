@@ -1,35 +1,32 @@
 package redis.skiplist;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
-import java.util.Set;
-import java.util.stream.Collectors;
 
-public class SkipList {
+class SkipList<S extends IMergeScore<S>, V> {
 
 	private static final int DEFAULT_MIN_MAX_LEVEL = 1;
 	private static final int DEFAULT_MAX_MAX_LEVEL = 31;
 
 	private static class SkipListLevel {
 		// 前进指针
-		private SkipListNode forward;
+		SkipListNode forward;
 		// 跨度
-		private long span;
+		long span;
 	}
 
 	private static class SkipListNode {
 		// 前进指针层
-		private final SkipListLevel[] levels;
+		final SkipListLevel[] levels;
 		// 后退指针
-		private SkipListNode backward;
+		SkipListNode backward;
 		// 分值
-		private final double score;
+		final Object score;
 		// 值
-		private final Object value;
+		final Object value;
 
-		private SkipListNode(int level, double score, Object value) {
+		private SkipListNode(int level, Object score, Object value) {
 			levels = new SkipListLevel[level];
 			backward = null;
 			this.score = score;
@@ -39,11 +36,11 @@ public class SkipList {
 
 	private static class SkipListRoot {
 		// 表头节点，不参与存储
-		private SkipListNode head;
+		SkipListNode head;
 		// 表尾节点，参与存储
-		private SkipListNode tail;
-		private int curMaxLevel;
-		private long size;
+		SkipListNode tail;
+		int curMaxLevel;
+		long size;
 
 		private SkipListRoot(int maxLevel) {
 			// 表头节点层数固定最大层数，方便后续操作
@@ -58,7 +55,7 @@ public class SkipList {
 	private int[] powers;
 	private Random rd = new Random();
 
-	public SkipList(int maxLevel) {
+	SkipList(int maxLevel) {
 		this.maxLevel = this.fixMaxLevel(maxLevel);
 		root = new SkipListRoot(this.maxLevel);
 		this.choosePowers();
@@ -99,30 +96,20 @@ public class SkipList {
 		return 1; // 如有意外发生，保证元素能插入第1层
 	}
 
-	public int add(double score, Object value) {
-		if (value == null) {
-			throw new NullPointerException();
-		}
-		// 先删除重复的节点
-		this.deleteNode(score, value);
-		return this.insertNode(score, value);
+	@SuppressWarnings({ "unchecked" })
+	private S getSKey(SkipListNode node) {
+		return (S) node.score;
 	}
 
-	public int incr(double incrScore, Object value) {
-		if (value == null) {
-			throw new NullPointerException();
-		}
-		double score = incrScore;
-		// 先删除重复的节点
-		SkipListNode tarNode = this.deleteNode(score, value);
-		score = tarNode != null ? tarNode.score + score : score;
-		return this.insertNode(score, value);
+	@SuppressWarnings("unchecked")
+	private V getValue(SkipListNode node) {
+		return (V) node.value;
 	}
 
 	/**
-	 * 返回排名,T=O(logN)
+	 * 插入新节点并返回排名（注意该方法不处理重复节点），T=O(logN)
 	 */
-	private int insertNode(double score, Object value) {
+	long add(S score, V value) {
 		int level = this.randomLevel();
 		// 初始化表头节点未使用过的层
 		if (level > root.curMaxLevel) {
@@ -134,14 +121,15 @@ public class SkipList {
 		// 每一层有可能需要更新的节点
 		SkipListNode[] updates = new SkipListNode[root.curMaxLevel];
 		// 每一层有可能需要更新的节点的排位（之后用来计算被更新节点、新节点的各层跨度）
-		int[] ranks = new int[root.curMaxLevel];
+		long[] ranks = new long[root.curMaxLevel];
 		SkipListNode curNode = root.head;
 		SkipListNode forward = null;
 		for (int i = root.curMaxLevel - 1; i >= 0; i--) {
 			// 跨度各层累加
 			ranks[i] = i == root.curMaxLevel - 1 ? 0 : ranks[i + 1];
-			// 相同分值先插入的节点排位在前，不考虑相同节点（更新节点应该先删除再重新插入）
-			while ((forward = curNode.levels[i].forward) != null && forward.score <= score) {
+			// 不考虑相同节点（更新节点应该先删除再重新插入），相同分值先插入排序在前
+			while ((forward = curNode.levels[i].forward) != null && (this.getSKey(forward).compareTo(score) < 0
+					|| this.getSKey(forward).compareTo(score) == 0 && !this.getValue(forward).equals(value))) {
 				ranks[i] += curNode.levels[i].span;
 				curNode = forward;
 			}
@@ -149,10 +137,12 @@ public class SkipList {
 		}
 		// 插入并修正跨度
 		SkipListNode tarNode = new SkipListNode(level, score, value);
-		for (int i = level; i >= 0; i--) {
+		for (int i = level - 1; i >= 0; i--) {
+			tarNode.levels[i] = new SkipListLevel();
 			tarNode.levels[i].forward = updates[i].levels[i].forward;
 			updates[i].levels[i].forward = tarNode;
-			tarNode.levels[i].span = updates[i].levels[i].span - (ranks[0] - ranks[i]) + 1;
+			tarNode.levels[i].span = tarNode.levels[i].forward == null ? 0
+					: updates[i].levels[i].span - (ranks[0] - ranks[i]) + 1;
 			updates[i].levels[i].span = ranks[0] - ranks[i] + 1;
 		}
 		// 未直接接触（直接跨过了）的节点跨度也要+1
@@ -174,83 +164,188 @@ public class SkipList {
 	}
 
 	/**
-	 * 返回被成功移除的节点数,T=M*O(logN)+O(N)
+	 * T=O(logN)
 	 */
-	public int remove(Object... values) {
-		List<SkipListNode> nodes = this.searchNode(Arrays.stream(values).collect(Collectors.toSet()));
-		for (SkipListNode node : nodes) {
-			this.deleteNode(node.score, node.value);
+	boolean remove(S score, V value) {
+		SkipListNode[] updates = new SkipListNode[root.curMaxLevel];
+		SkipListNode curNode = root.head, forward = null, tarNode = null;
+		for (int i = root.curMaxLevel - 1; i >= 0; i--) {
+			while ((forward = curNode.levels[i].forward) != null && (this.getSKey(forward).compareTo(score) < 0
+					|| this.getSKey(forward).compareTo(score) == 0 && !this.getValue(forward).equals(value))) {
+				curNode = forward;
+			}
+			if (forward != null && this.getSKey(forward).compareTo(score) == 0
+					&& this.getValue(forward).equals(value)) {
+				tarNode = forward;
+			}
+			updates[i] = curNode;
 		}
-		return nodes.size();
+		if (tarNode == null) {
+			return false;
+		}
+		this.remoteNode(tarNode, updates);
+		return true;
+	}
+
+	List<V> removeRange(long start, long end) {
+		List<V> results = new ArrayList<>();
+		start = start < 0 ? root.size + start + 1 : start;
+		start = Math.max(1, Math.min(start, root.size - 1));
+		end = end < 0 ? root.size + end + 1 : end;
+		end = Math.max(1, Math.min(Math.max(start, end), root.size));
+		int curRank = 0;
+		SkipListNode tarNode = null, curNode = root.head, forward = null;
+		for (int i = root.curMaxLevel - 1; i >= 0; i--) {
+			while ((forward = curNode.levels[i].forward) != null && curRank + curNode.levels[i].span <= start) {
+				curRank += curNode.levels[i].span;
+				curNode = forward;
+			}
+			if (curRank == start) {
+				tarNode = curNode;
+				break;
+			}
+		}
+		return results;
+	}
+
+	List<V> removeRangeByScore(S min, S max) {
+
+		return null;
+	}
+
+	private void remoteNode(SkipListNode tarNode, SkipListNode[] updates) {
+		int level = tarNode.levels.length;
+		// 修正相连节点的前进指针以及跨度
+		for (int i = 0; i < level; i++) {
+			updates[i].levels[i].forward = tarNode.levels[i].forward;
+			if (updates[i].levels[i].forward != null) {
+				updates[i].levels[i].span += tarNode.levels[i].span - 1;
+			} else {
+				updates[i].levels[i].span = 0;
+			}
+		}
+		// 修正未直接相连的节点的跨度（跨过了的节点）
+		for (int i = level; i < root.curMaxLevel; i++) {
+			if (updates[i].levels[i].forward != null) {
+				updates[i].levels[i].span--;
+			}
+		}
+		// 修正尾指针or后退指针
+		if (root.tail == tarNode) {
+			root.tail = tarNode.backward;
+		} else {
+			tarNode.levels[0].forward.backward = tarNode.backward;
+		}
+		// 修正跳跃表最大高度
+		while (root.curMaxLevel > 1 && root.head.levels[root.curMaxLevel - 1].forward == null) {
+			root.curMaxLevel--;
+		}
+		root.size--;
+	}
+
+	/**
+	 * T=O(1)
+	 */
+	boolean isBetterThanTail(S score) {
+		if (root.tail == null) {
+			return true;
+		}
+		return score.compareTo(this.getSKey(root.tail)) > 0;
+	}
+
+	/**
+	 * T=O(1)
+	 */
+	V getTail() {
+		if (root.tail == null) {
+			return null;
+		}
+		return this.getValue(root.tail);
+	}
+
+	/**
+	 * T=O(1)
+	 */
+	long size() {
+		return root.size;
 	}
 
 	/**
 	 * T=O(logN)
 	 */
-	private SkipListNode deleteNode(double score, Object value) {
-		SkipListNode tarNode = null;
-		SkipListNode[] updates = new SkipListNode[root.curMaxLevel];
+	long rank(S score, V value) {
 		SkipListNode curNode = root.head;
 		SkipListNode forward = null;
+		int[] ranks = new int[root.curMaxLevel];
 		for (int i = root.curMaxLevel - 1; i >= 0; i--) {
-			while ((forward = curNode.levels[i].forward) != null
-					&& (forward.score < score || (forward.score == score && !forward.value.equals(value)))) {
+			ranks[i] = i == root.curMaxLevel - 1 ? 0 : ranks[i + 1];
+			while ((forward = curNode.levels[i].forward) != null && (this.getSKey(forward).compareTo(score) < 0
+					|| this.getSKey(forward).compareTo(score) == 0 && !this.getValue(forward).equals(value))) {
+				ranks[i] += curNode.levels[i].span;
 				curNode = forward;
 			}
-			// 不中断，直到找到各层相对于该节点的前置节点
-			if (forward.score == score && forward.value.equals(value)) {
-				tarNode = forward;
-			}
-			updates[i] = curNode;
-		}
-		if (tarNode != null) {
-			int level = tarNode.levels.length;
-			for (int i = 0; i < level; i++) {
-				updates[i].levels[i].forward = tarNode.levels[i].forward;
-				if (tarNode.levels[i].forward == null) {
-					updates[i].levels[i].span = 0;
-				} else {
-					updates[i].levels[i].span += tarNode.levels[i].span - 1;
-				}
-			}
-			for (int i = level; i < root.curMaxLevel; i++) {
-				if (updates[i].levels[i].forward != null) {
-					updates[i].levels[i].span--;
-				}
-			}
-			// 更新表尾节点or修正新节点的1层前进节点的后退指针
-			if (tarNode == root.tail) {
-				root.tail = tarNode.backward;
-			} else {
-				tarNode.levels[0].forward.backward = tarNode.backward;
+			if (this.getSKey(forward).compareTo(score) == 0 && this.getValue(forward).equals(value)) {
+				return ranks[i] + curNode.levels[i].span;
 			}
 		}
-		return tarNode;
-	}
-
-	public int rank(Object value) {
-
-		return -1;
-	}
-
-	public int score(Object value) {
 		return -1;
 	}
 
 	/**
-	 * T=O(N)
+	 * T=O(logN+M)，M：要获取的元素数量
 	 */
-	private List<SkipListNode> searchNode(Set<Object> values) {
-		List<SkipListNode> nodes = new ArrayList<>();
-		SkipListNode curNode = root.head;
-		SkipListNode forward = null;
-		while ((forward = curNode.levels[0].forward) != null) {
-			if (values.contains(forward.value)) {
-				nodes.add(forward);
+	public List<V> range(long start, long end) {
+		List<V> results = new ArrayList<>();
+		start = start < 0 ? root.size + start + 1 : start;
+		start = Math.max(1, Math.min(start, root.size - 1));
+		end = end < 0 ? root.size + end + 1 : end;
+		end = Math.max(1, Math.min(Math.max(start, end), root.size));
+		int traversed = 0;
+		SkipListNode tarNode = null, curNode = root.head, forward = null;
+		for (int i = root.curMaxLevel - 1; i >= 0; i--) {
+			while ((forward = curNode.levels[i].forward) != null && traversed + curNode.levels[i].span < start) {
+				traversed += curNode.levels[i].span;
+				curNode = forward;
 			}
-			curNode = forward;
+			if (traversed == start) {
+				tarNode = curNode;
+				break;
+			}
 		}
-		return nodes;
+		if (tarNode != null) {
+			results.add(this.getValue(curNode));
+			for (int i = 0; i < end - start; i++) {
+				results.add(this.getValue(tarNode.levels[0].forward));
+				tarNode = tarNode.levels[0].forward;
+			}
+		}
+		return results;
+	}
+
+	/**
+	 * T=O(logN+M)，M：要获取的元素数量
+	 */
+	public List<V> rangeByScore(S min, S max) {
+		List<V> results = new ArrayList<>();
+		max = max.compareTo(min) < 0 ? min : max;
+		SkipListNode tarMinNode = null, curNode = root.head, forward = null;
+		for (int i = root.curMaxLevel - 1; i >= 0; i--) {
+			while ((forward = curNode.levels[i].forward) != null && this.getSKey(forward).compareTo(min) <= 0) {
+				curNode = forward;
+			}
+			if (this.getSKey(curNode).compareTo(min) == 0) {
+				tarMinNode = curNode;
+				break;
+			}
+		}
+		if (tarMinNode != null) {
+			results.add(this.getValue(tarMinNode));
+			while ((forward = tarMinNode.levels[0].forward) != null && this.getSKey(forward).compareTo(max) <= 0) {
+				results.add(this.getValue(forward));
+				tarMinNode = forward;
+			}
+		}
+		return results;
 	}
 
 }

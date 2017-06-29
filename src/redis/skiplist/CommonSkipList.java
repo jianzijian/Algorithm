@@ -190,7 +190,7 @@ public class CommonSkipList {
 			}
 			updates[i] = curNode;
 		}
-		if (curNode != null) {
+		if (tarNode != null) {
 			int level = tarNode.levels.length;
 			for (int i = 0; i < level; i++) {
 				updates[i].levels[i].forward = tarNode.levels[i].forward;

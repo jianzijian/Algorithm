@@ -49,7 +49,7 @@ public class SortedSet<S extends IMergeScore<S>, V> {
 		return -1;
 	}
 
-	public synchronized void addAll(Map<S, V> svMap) {
+	public synchronized void addBatch(Map<S, V> svMap) {
 		// 后一次的插入会导致前一次插入返回的排名变得不准确，所以干脆不返回了
 		for (Entry<S, V> entry : svMap.entrySet()) {
 			this.add(entry.getKey(), entry.getValue());
@@ -95,7 +95,7 @@ public class SortedSet<S extends IMergeScore<S>, V> {
 		return score;
 	}
 
-	public synchronized Map<V, S> removeAll(Set<V> values) {
+	public synchronized Map<V, S> removeBatch(Set<V> values) {
 		Map<V, S> results = new HashMap<>();
 		for (V value : values) {
 			S score = this.remove(value);
@@ -107,13 +107,17 @@ public class SortedSet<S extends IMergeScore<S>, V> {
 	}
 
 	public synchronized Map<V, S> removeRange(long start, long end) {
-
-		return null;
+		List<V> values = skipList.removeRange(start, end);
+		Map<V, S> vsMap = new HashMap<>();
+		values.forEach(value -> vsMap.put(value, value2Score.get(value)));
+		return vsMap;
 	}
 
 	public synchronized Map<V, S> removeRangeByScore(S min, S max) {
-
-		return null;
+		List<V> values = skipList.removeRangeByScore(min, max);
+		Map<V, S> vsMap = new HashMap<>();
+		values.forEach(value -> vsMap.put(value, value2Score.get(value)));
+		return vsMap;
 	}
 
 	public synchronized long rank(V value) {

@@ -9,14 +9,14 @@ class SkipList<S extends IMergeScore<S>, V> {
 	private static final int DEFAULT_MIN_MAX_LEVEL = 1;
 	private static final int DEFAULT_MAX_MAX_LEVEL = 31;
 
-	private static class SkipListLevel {
+	private static final class SkipListLevel {
 		// 前进指针
 		SkipListNode forward;
 		// 跨度
 		long span;
 	}
 
-	private static class SkipListNode {
+	private static final class SkipListNode {
 		// 前进指针层
 		final SkipListLevel[] levels;
 		// 后退指针
@@ -34,7 +34,7 @@ class SkipList<S extends IMergeScore<S>, V> {
 		}
 	}
 
-	private static class SkipListRoot {
+	private static final class SkipListRoot {
 		// 表头节点，不参与存储
 		SkipListNode head;
 		// 表尾节点，参与存储
@@ -193,24 +193,49 @@ class SkipList<S extends IMergeScore<S>, V> {
 		start = Math.max(1, Math.min(start, root.size - 1));
 		end = end < 0 ? root.size + end + 1 : end;
 		end = Math.max(1, Math.min(Math.max(start, end), root.size));
-		int curRank = 0;
-		SkipListNode tarNode = null, curNode = root.head, forward = null;
+		int traversed = 0;
+		SkipListNode[] updates = new SkipListNode[root.curMaxLevel];
+		SkipListNode startNode = null, curNode = root.head, forward = null;
 		for (int i = root.curMaxLevel - 1; i >= 0; i--) {
-			while ((forward = curNode.levels[i].forward) != null && curRank + curNode.levels[i].span <= start) {
-				curRank += curNode.levels[i].span;
+			while ((forward = curNode.levels[i].forward) != null && traversed + curNode.levels[i].span <= start) {
+				traversed += curNode.levels[i].span;
 				curNode = forward;
 			}
-			if (curRank == start) {
-				tarNode = curNode;
-				break;
+			if (traversed == start) {
+				startNode = curNode;
 			}
+			updates[i] = curNode;
+		}
+		while (startNode != null && traversed++ <= end) {
+			results.add(this.getValue(startNode));
+			forward = startNode.levels[0].forward;
+			this.remoteNode(startNode, updates);
+			startNode = forward;
 		}
 		return results;
 	}
 
 	List<V> removeRangeByScore(S min, S max) {
-
-		return null;
+		List<V> results = new ArrayList<>();
+		max = max.compareTo(min) < 0 ? min : max;
+		SkipListNode[] updates = new SkipListNode[root.curMaxLevel];
+		SkipListNode startNode = null, curNode = root.head, forward = null;
+		for (int i = root.curMaxLevel - 1; i >= 0; i--) {
+			while ((forward = curNode.levels[i].forward) != null && this.getSKey(forward).compareTo(min) <= 0) {
+				curNode = forward;
+			}
+			if (this.getSKey(curNode).compareTo(min) == 0) {
+				startNode = curNode;
+			}
+			updates[i] = curNode;
+		}
+		while (startNode != null && this.getSKey(startNode).compareTo(max) <= 0) {
+			results.add(this.getValue(startNode));
+			forward = startNode.levels[0].forward;
+			this.remoteNode(startNode, updates);
+			startNode = forward;
+		}
+		return results;
 	}
 
 	private void remoteNode(SkipListNode tarNode, SkipListNode[] updates) {
@@ -284,7 +309,8 @@ class SkipList<S extends IMergeScore<S>, V> {
 				ranks[i] += curNode.levels[i].span;
 				curNode = forward;
 			}
-			if (this.getSKey(forward).compareTo(score) == 0 && this.getValue(forward).equals(value)) {
+			if (forward != null && this.getSKey(forward).compareTo(score) == 0
+					&& this.getValue(forward).equals(value)) {
 				return ranks[i] + curNode.levels[i].span;
 			}
 		}
